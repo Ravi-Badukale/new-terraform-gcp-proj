@@ -1,6 +1,8 @@
+variable "project_id" {
+}
 variable "vpc_name" {
   
-}               
+}
 
 variable "subnetwork" {
     type = map(object({
