@@ -35,7 +35,12 @@ module "compute" {
             vm                  = vm
             subnet_key          = "${vpc_name}-${subnet_name}"
             public_ip           = vm.public_ip
-            startup_script_path = lookup(vm, "startup_script_path", null)
+            
+            startup_script_path        = lookup(vm, "startup_script_path", null)
+            os_type                    = lookup(vm, "os_type", "linux")
+            windows_admin_username     = lookup(vm, "windows_admin_username", null)
+            windows_admin_password     = lookup(vm, "windows_admin_password", null)
+
           }
         ]
       ]
@@ -49,6 +54,11 @@ module "compute" {
   public_ip           = each.value.public_ip
   startup_script_path = each.value.startup_script_path
   subnet_self_link    = module.subnet[each.value.subnet_key].self_link
+  
+  os_type                 = each.value.os_type
+  windows_admin_username  = each.value.windows_admin_username
+  windows_admin_password  = each.value.windows_admin_password
+
 }
 
 module "firewall" {
@@ -93,104 +103,3 @@ module "nat" {
   network_self_link = module.vpc[each.key].self_link
 }
 
-module "vpc-peering" {
-  for_each = {
-    for vpc_peering in flatten([
-      for name, p in var.vpc_peering : [
-        {
-          key     = "${name}-a-to-b"
-          name    = "${p.vpc_1}-to-${p.vpc_2}"
-          network = p.vpc_1
-          peer    = p.vpc_2
-          export  = lookup(p, "export_custom_routes", false)
-          import  = lookup(p, "import_custom_routes", false)
-        },
-        {
-          key     = "${name}-b-to-a"
-          name    = "${p.vpc_2}-to-${p.vpc_1}"
-          network = p.vpc_2
-          peer    = p.vpc_1
-          export  = lookup(p, "export_custom_routes", false)
-          import  = lookup(p, "import_custom_routes", false)
-        }
-      ]
-    ]) : vpc_peering.key => vpc_peering
-  }
-
-  source = "./modules/vpc-peering"
-
-  name                   = each.value.name
-  network_self_link      = module.vpc[each.value.network].self_link
-  peer_network_self_link = module.vpc[each.value.peer].self_link
-
-  export_custom_routes = each.value.export
-  import_custom_routes = each.value.import
-
-}
-
-module "classic_vpns" {
-  for_each = var.classic_vpns
-  source   = "./modules/classic-vpn"
-
-  name                   = each.key
-  region                 = each.value.region
-  network_self_link      = module.vpc[each.value.vpc_1].self_link
-  peer_network_self_link = module.vpc[each.value.vpc_2].self_link
-
-  shared_secret       = each.value.shared_secret
-  local_subnet_cidrs  = each.value.vpc_1_subnet_cidrs
-  remote_subnet_cidrs = each.value.vpc_2_subnet_cidrs
-}
-
-module "static_routes" {
-  source = "./modules/static_route"
-
-  routes = {
-    for route_name, route in var.static_routes :
-    route_name => {
-      network_self_link = module.vpc[route.vpc].self_link
-      dest_range        = route.dest_range
-      next_hop_type     = route.next_hop_type
-      next_hop_value    = route.next_hop_value
-      priority          = route.priority
-      tag               = lookup(route, "tag", null)
-    }
-  }
-}
-
-module "uig" {
-  source = "./modules/instance-group"
-
-  for_each = var.uig
-  name     = each.key
-  zone     = each.value.zone
-
-  instances = [
-    for vm_name in each.value.instances :
-    module.compute[vm_name].self_link
-  ]
-}
-
-module "http_lb" {
-  source = "./modules/http-lb"
-
-  for_each = var.http_lb
-  name     = each.key
-
-  backend_instance_group = module.uig[each.value.instance_group].self_link
-}
-
-module "internal_nlb" {
-  for_each = var.internal_nlb
-  source   = "./modules/internal_nlb"
-
-  name       = each.key
-  region     = each.value.region
-  network    = module.vpc[each.value.vpc_key].self_link
-  subnetwork = module.subnet[each.value.subnet_key].self_link
-
-  ports                  = each.value.port
-  health_check_port      = each.value.health_port
-  ip_protocol            = each.value.ip_protocol
-  backend_instance_group = module.uig[each.value.backend_instance_group].self_link
-}
